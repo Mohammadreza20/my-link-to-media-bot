@@ -3,28 +3,39 @@ from bs4 import BeautifulSoup
 
 def download_video(video_page_url, username, password):
     session = requests.Session()
-    login_url = "https://example.com/login"  # CHANGE THIS
 
-    # Login
+    # STEP 1: Log in
+    login_url = "https://www.whoreshub.com/login"  # Update if different
     session.post(login_url, data={
         "username": username,
         "password": password
     })
 
-    # Get video page
-    page = session.get(video_page_url)
-    soup = BeautifulSoup(page.content, "html.parser")
+    # STEP 2: Get the video page
+    response = session.get(video_page_url)
+    soup = BeautifulSoup(response.content, "html.parser")
 
-    # Find video src (adjust selector as needed)
-    video_url = soup.find("video")["src"]
+    # STEP 3: Find the .mp4 download link
+    video_link_tag = soup.find("a", href=lambda href: href and href.endswith(".mp4"))
 
-    # Download video
-    video_data = session.get(video_url, stream=True)
-    with open("video.mp4", "wb") as f:
-        for chunk in video_data.iter_content(8192):
+    if not video_link_tag:
+        raise Exception("⚠️ Could not find video download link on the page.")
+
+    video_url = video_link_tag["href"]
+
+    # If link is relative, make it absolute
+    if video_url.startswith("/"):
+        video_url = f"https://www.whoreshub.com{video_url}"
+
+    # STEP 4: Download the video
+    video_response = session.get(video_url, stream=True)
+    file_path = "video.mp4"
+    with open(file_path, "wb") as f:
+        for chunk in video_response.iter_content(8192):
             f.write(chunk)
 
-    return "video.mp4"
+    return file_path
+
 
 
 
