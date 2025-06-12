@@ -1,40 +1,63 @@
 import requests
 from bs4 import BeautifulSoup
 
+import re
+import requests
+from bs4 import BeautifulSoup
+
+def extract_resolution(text):
+    """Extracts resolution like 2160, 1080 from a string"""
+    match = re.search(r"(\d{3,4})p", text)
+    return int(match.group(1)) if match else 0
+
 def download_video(video_page_url, username, password):
     session = requests.Session()
+    
+    # 🟡 Change this to your actual login URL
+    login_url = "https://www.whoreshub.com/login/"
 
-    # STEP 1: Log in
-    login_url = "https://www.whoreshub.com/login"  # Update if different
-    session.post(login_url, data={
+    # Login payload — double-check parameter names from browser dev tools
+    payload = {
         "username": username,
         "password": password
-    })
+    }
 
-    # STEP 2: Get the video page
+    # 🔐 Perform login
+    login_response = session.post(login_url, data=payload)
+    if login_response.status_code != 200:
+        raise Exception("Login failed!")
+
+    # 🟢 Fetch video page
     response = session.get(video_page_url)
     soup = BeautifulSoup(response.content, "html.parser")
 
-    # STEP 3: Find the .mp4 download link
-    video_link_tag = soup.find("a", href=lambda href: href and href.endswith(".mp4"))
+    # 🧠 Find all download links
+    download_links = []
+    for a in soup.select("ul.tags-list a"):
+        href = a.get("href")
+        text = a.get_text(strip=True)
 
-    if not video_link_tag:
-        raise Exception("⚠️ Could not find video download link on the page.")
+        if "mp4" in text.lower() and "p" in text:
+            resolution = extract_resolution(text)
+            download_links.append((resolution, href))
 
-    video_url = video_link_tag["href"]
+    if not download_links:
+        raise Exception("No downloadable videos found.")
 
-    # If link is relative, make it absolute
-    if video_url.startswith("/"):
-        video_url = f"https://www.whoreshub.com{video_url}"
+    # 🎯 Select highest resolution link
+    best_link = max(download_links, key=lambda x: x[0])[1]
 
-    # STEP 4: Download the video
-    video_response = session.get(video_url, stream=True)
-    file_path = "video.mp4"
-    with open(file_path, "wb") as f:
-        for chunk in video_response.iter_content(8192):
+    # 💾 Download the video
+    print(f"Downloading: {best_link}")
+    video_data = session.get(best_link, stream=True)
+    video_path = "video.mp4"
+
+    with open(video_path, "wb") as f:
+        for chunk in video_data.iter_content(chunk_size=8192):
             f.write(chunk)
 
-    return file_path
+    return video_path
+
 
 
 
@@ -57,13 +80,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text
-    await update.message.reply_text("Downloading the video. Please wait...")
+    await update.message.reply_text("🔍 Logging in and fetching video. Please wait...")
 
     try:
         video_path = download_video(url, LOGIN_USERNAME, LOGIN_PASSWORD)
         await context.bot.send_video(chat_id=update.effective_chat.id, video=open(video_path, "rb"))
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
+
 
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
