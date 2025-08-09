@@ -36,12 +36,12 @@ def create_session(username=None, password=None):
     s = requests.Session()
     # If credentials provided, try login (change keys to match site)
     if username and password:
-        login_url = "https://www.pythontuto.com/login/"  # change if needed
+        login_url = "https://www.whoreshub.com/login/"  # change if needed
         payload = {
             "username": username,
             "pass": password,
             "action": "login",
-            "email_link": "https://www.pythontuto.com/email/"
+            "email_link": "https://www.whoreshub.com/email/"
         }
         r = s.post(login_url, data=payload, timeout=15)
         logger.info("Login status: %s", r.status_code)
@@ -401,3 +401,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
