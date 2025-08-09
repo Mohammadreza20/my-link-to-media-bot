@@ -46,6 +46,20 @@ def create_session(username=None, password=None):
         r = s.post(login_url, data=payload, timeout=15)
         logger.info("Login status: %s", r.status_code)
     return s
+    
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text.strip()
+    print(f"📩 Received URL: {user_message}")  # Debug print
+    await update.message.reply_text("Got your URL! Processing...")
+
+    try:
+        video_url = extract_best_video(user_message)  # your custom function
+        print(f"🎯 Extracted video URL: {video_url}")
+        await update.message.reply_video(video_url)
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        await update.message.reply_text("Sorry, something went wrong.")
+
 
 # ---------- Helper: extract mp4 links from page ----------
 def extract_mp4_links(session: requests.Session, page_url: str):
@@ -401,4 +415,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
