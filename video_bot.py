@@ -47,77 +47,108 @@ def create_session(username=None, password=None):
         logger.info("Login status: %s", r.status_code)
     return s
     
+# Start command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📥 Send me a video page URL (from your site). I will find the best quality and upload it."
+    )
+
+# Handle URL messages
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text.strip()
-    print(f"📩 Received URL: {user_message}")  # Debug print
-    await update.message.reply_text("Got your URL! Processing...")
+    url = update.message.text.strip()
+
+    if not re.match(r'^https?://', url):
+        await update.message.reply_text("❌ Please send a valid URL starting with http:// or https://")
+        return
+
+    await update.message.reply_text("🔍 Processing your URL, please wait...")
 
     try:
-        video_url = extract_best_video(user_message)  # your custom function
-        print(f"🎯 Extracted video URL: {video_url}")
-        await update.message.reply_video(video_url)
+        video_url = extract_video_url(url)  # <-- Replace with your site scraping logic
+        best_quality_url = get_best_quality(video_url)
+        file_path = download_video(best_quality_url)
+        await update.message.reply_video(video=open(file_path, 'rb'))
+        os.remove(file_path)
     except Exception as e:
-        print(f"❌ Error: {e}")
-        await update.message.reply_text("Sorry, something went wrong.")
+        await update.message.reply_text(f"⚠️ Error: {str(e)}")
+
+
 
 
 # ---------- Helper: extract mp4 links from page ----------
 def extract_mp4_links(session: requests.Session, page_url: str):
     """
-    Try to find direct mp4 links on the page.
-    If the page contains an async/data-limit-url block, fetch that block and parse it too.
-    Returns list of tuples: (href, label_text)
+    Improved extractor:
+    - Uses AJAX headers when fetching async blocks (data-limit-url / js-limit-url)
+    - Falls back to scanning anchors and scripts
+    - Normalizes relative links
     """
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = session.get(page_url, headers=headers, timeout=15)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        # useful for AJAX endpoints
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": page_url
+    }
+
+    try:
+        r = session.get(page_url, headers=headers, timeout=18)
+    except Exception as e:
+        logger.exception("Failed to GET page_url")
+        raise
+
     r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
+    page_text = r.text
+    soup = BeautifulSoup(page_text, "html.parser")
 
     links = []
-    # Common: links inside ul.tags-list a
-    for a in soup.select("ul.tags-list a[href$='.mp4']"):
+    # 1) Common pattern on your site: <ul class="tags-list"> <a href="...1080p.mp4">
+    for a in soup.select("ul.tags-list a[href$='.mp4'], a.btn[href$='.mp4']"):
         href = a.get("href")
         text = a.get_text(strip=True)
         if href:
             links.append((href, text))
 
-    # If none found, check for data-limit-url (site loads block asynchronously)
+    # 2) Some pages load the block via async/data-limit-url: try to find it and fetch it
     if not links:
         el = soup.select_one("div.tab-box[data-limit-url], a.js-limit-url[data-limit-url], a.js-limit-url[href]")
         if el:
-            # try to find data-limit-url attribute or href
             async_url = el.get("data-limit-url") or el.get("href")
             if async_url:
-                # make absolute if needed
+                # make absolute if necessary
                 if async_url.startswith("/"):
-                    base = "{0}://{1}".format(requests.utils.urlparse(page_url).scheme, requests.utils.urlparse(page_url).netloc)
-                    async_url = base + async_url
-                r2 = session.get(async_url, headers=headers, timeout=15)
-                if r2.ok:
+                    parsed = requests.utils.urlparse(page_url)
+                    async_url = f"{parsed.scheme}://{parsed.netloc}{async_url}"
+                # also ensure ampersands are correct
+                async_url = async_url.replace("&amp;", "&")
+                try:
+                    r2 = session.get(async_url, headers=headers, timeout=18)
+                    r2.raise_for_status()
                     soup2 = BeautifulSoup(r2.text, "html.parser")
                     for a in soup2.select("a[href$='.mp4']"):
                         href = a.get("href")
                         text = a.get_text(strip=True)
                         if href:
                             links.append((href, text))
+                except Exception:
+                    logger.exception("Failed to fetch async block at %s", async_url)
 
-    # Fallback: search entire page for any .mp4 link in anchors or script
+    # 3) Fallback: search anchors and script text for .mp4 URLs
     if not links:
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if ".mp4" in href:
                 links.append((href, a.get_text(strip=True) or href))
 
-        # also try to parse script blocks for "mp4" urls
-        if not links:
-            scripts = soup.find_all("script")
-            for sc in scripts:
-                txt = sc.string or sc.get_text()
-                found = re.findall(r"(https?://[^\s\"']+\.mp4[^\s\"']*)", txt)
-                for f in found:
-                    links.append((f, "from_script"))
+    if not links:
+        # search scripts for https://... .mp4 in JS
+        scripts = soup.find_all("script")
+        for sc in scripts:
+            txt = sc.string or sc.get_text()
+            found = re.findall(r"(https?://[^\s\"']+\.mp4[^\s\"']*)", txt)
+            for f in found:
+                links.append((f, "from_script"))
 
-    # Normalize relative urls
+    # Normalize relative URLs
     normalized = []
     for href, txt in links:
         if href.startswith("//"):
@@ -125,8 +156,17 @@ def extract_mp4_links(session: requests.Session, page_url: str):
         if href.startswith("/"):
             parsed = requests.utils.urlparse(page_url)
             href = f"{parsed.scheme}://{parsed.netloc}{href}"
+        href = href.replace("&amp;", "&")
         normalized.append((href, txt))
-    return normalized
+    # remove duplicates keeping order
+    seen = set()
+    out = []
+    for h, t in normalized:
+        if h not in seen:
+            seen.add(h)
+            out.append((h, t))
+    logger.info("extract_mp4_links found %d candidates", len(out))
+    return out
 
 # ---------- Helper: parse resolution ----------
 def resolution_priority(href, label=""):
@@ -414,6 +454,9 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+
     main()
+
 
 
