@@ -454,9 +454,10 @@ def main():
     app.run_polling()
 
 if __name__ == "__main__":
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
 
     main()
+
 
 
 
